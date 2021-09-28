@@ -1,0 +1,291 @@
+<html lang="en">
+<head>
+    <title>Channel - print{{channel.id}}</title>
+</head>
+<body id="body">
+Users (print{{Object.keys(channel.users).length}}):<br>
+print{{Object.keys(channel.users).map(i => { const u = ChatAPI.getUser(i); return u ? (`<img class="circle-img" src='http://${req.rawHeaders[1]}/avatars/${u.avatar}' width="16" height="16" alt="avatar"> ${u.username}`) + "" : "User not found!" }).join("<br>")}}
+
+<hr>
+
+<div class="message-main-div" id="messages"></div>
+
+<div style="text-align: center;">
+    <label for="input"></label><input style="width: 95.6%;" id="input" type="text" placeholder="Type message...">
+    <button style="width: 4%;" onclick="send()">Send</button>
+</div>
+</body>
+</html>
+
+<script>
+    let ws;
+
+    function crash() {
+        document.getElementById("body").innerHTML = "System unexpectedly crashed! Try refreshing page...";
+    }
+
+    const PACKETS = {
+        "CHANNEL_MENTION_UPDATE": 0x0001,
+        "MESSAGE_CREATE": 0x0002,
+        "MESSAGE_DELETE": 0x0003,
+        "MESSAGE_EDIT": 0x0004,
+        "FETCH_USER": 0x0005,
+        "FETCH_CHANNEL": 0x0006,
+    };
+    const channelId = "print{{channel.id}}" * 1;
+    let ephemeral = 0;
+    const messageCache = {};
+    const userCache = {};
+    const url = 'print{{req.rawHeaders[1]}}';
+    const LT = d => (d.getHours() > 12 ? d.getHours() - 12 : d.getHours()) + ":" + d.getMinutes() + " " + (d.getHours() > 12 ? "PM" : "AM");
+    const toDate = (time) => {
+        const date = new Date();
+        const d = new Date(time);
+        if (Date.now() - time > (1000 * 60 * 60 * 24 * 3)) {
+            return d.getDate() + "/" + d.getMonth() + "/" + d.getFullYear();
+        } else {
+            if (date.getUTCDay() === d.getUTCDate()) {
+                return "Today at " + LT(d);
+            } else if (date.getUTCDay() - 1 === d.getUTCDate()) {
+                return "Yesterday at " + LT(d);
+            } else {
+                return d.getDate() + "/" + d.getMonth() + "/" + d.getFullYear();
+            }
+        }
+    };
+
+    function handlePacket(pk) {
+    }
+
+    let urlId = 0;
+    const urls = {};
+    const urlEnter = id => window.location.href = urls[id];
+    const userId = "print{{req.user.id}}" * 1;
+
+    function getMessageContentText(value) {
+        let con = value.content || "<i>magic deleted</id>";
+        (value.urls || []).forEach(i => {
+            let ii = urlId++;
+            let iii = urlId++;
+            urls[ii] = "http://" + i;
+            urls[iii] = "https://" + i;
+            con = con
+                .replaceAll(`http://${i}`, `<a href="#" id="url-${ii}">http://${i}</a>`)
+                .replaceAll(`https://${i}`, `<a href="#" id="url-${iii}">https://${i}</a>`);
+        })
+        return con + (value.options["edited"] ? ` <span title="${value.options["edited"]}"><i>edited</i></span>` : "");
+    }
+    const loadingImages = {};
+    let imgIds = 0;
+
+    function getMessageText(i) {
+        if (i.deleted) return "";
+        return `<div style="text-align: ${userId === i.author.id ? "right" : "left"}" class="message-author-div">
+${i.author.username}#${i.author.discriminator}
+<img class="message-author circle-img" src="http://${url}/avatars/user/${i.author.id}" width="16" height="16" alt="${i.author.avatar}">
+<span class="message-date">${toDate(i.createdTimestamp)}</span>
+<div class="message-div" id="message-content-${i.id}">${getMessageContentText(i)}
+${(i.attachments || []).map(a => {
+            switch (a.type) {
+                case 0:
+                    break;
+                case 1:
+                    a.urlL = a.url;
+                    a.url = "http://" + url + "/images/" + a.url;
+                    const imgId = imgIds++;
+                    loadingImages[imgId] = {
+                        url: a.url,
+                        orig: a.urlL,
+                        id: i.id
+                    };
+                    return `<div class="message-attachment message-attachment-image"><img id="image-${imgId}" src="#" style="opacity: 0;" alt="image"></div>`;
+            }
+        })}
+</div></div>`;
+    }
+
+    setInterval(() => {
+        Object.keys(loadingImages).forEach(key => {
+            const doc = document.getElementById("image-" + key);
+            const img = new Image();
+            img.onerror = () => {
+                delete loadingImages[key];
+                doc.style.opacity = "0";
+            }
+            let first = false;
+            img.onload = () => {
+                if(first) return;
+                first = true;
+                document.getElementById("message-content-" + loadingImages[key].id).innerHTML = document.getElementById("message-content-" + loadingImages[key].id).innerHTML.replace(`<a href='http://${loadingImages[key].orig}'>http://${loadingImages[key].orig}</a>`, "");
+            };
+            img.src = loadingImages[key].url;
+            doc.src = img.src;
+            doc.style.opacity = "1";
+        });
+    }, 1000);
+
+    function addMessage(i) {
+        document.getElementById("messages").innerHTML = document.getElementById("messages").innerHTML + `<div class="message" id="message-${i.id}">` + getMessageText(i) + "</div>";
+        Object.keys(urls).forEach(key => {
+            document.getElementById("url-" + key).href = urls[key];
+            delete urls[key];
+        });
+    }
+
+    let lost = 0;
+    const sendPacket = pk => ws.send(JSON.stringify(pk));
+    const createWs = () => {
+        ws = new WebSocket("ws" + "://" + url.replace(":3000", "") + ":7071/");
+        ws.onopen = ev => {
+            if (!ev) return;
+            console.log("Connected to web socket.")
+            if (lost !== 0) return window.location.href = "/channels/" + channelId;
+            sendPacket({
+                action: "LOGIN",
+                token: "print{{req.token}}"
+            });
+            sendPacket({
+                action: "FETCH_CHANNEL",
+                channelId: channelId
+            });
+        }
+        ws.onclose = ev => {
+            if (!ev) return;
+            if (lost === 0) lost = Date.now();
+            document.getElementById("body").innerHTML = "Connection lost, trying to reconnect for " + Math.floor((Date.now() - lost) / 1000) + " seconds...";
+            createWs();
+        }
+        ws.onerror = ev => {
+            if (!ev) return;
+            if (lost === 0) lost = Date.now();
+            document.getElementById("body").innerHTML = "Connection lost, trying to reconnect for " + Math.floor((Date.now() - lost) / 1000) + " seconds...";
+            if (ws.readyState !== ws.CLOSED) createWs();
+        }
+        ws.onmessage = ev => {
+            try {
+                const json = JSON.parse(ev.data);
+                const value = json.value;
+                switch (json.id) {
+                    case PACKETS.FETCH_CHANNEL:
+                        value.filter(i => !messageCache[i.id]).forEach(i => {
+                            messageCache[i.id] = i;
+                            addMessage(i);
+                        });
+                        Object.keys(messageCache).filter(i => value.some(a => a.id === i)).forEach(id => {
+                            delete messageCache[id];
+                            document.getElementById("message-content-" + id).innerHTML = "<i>force deleted</i>";
+                        });
+                        break;
+                    case PACKETS.FETCH_USER:
+                        userCache[value.id] = value;
+                        break;
+                    case PACKETS.MESSAGE_CREATE:
+                        if (messageCache[value.id]) return;
+                        messageCache[value.id] = value;
+                        addMessage(value);
+                        break;
+                    case PACKETS.MESSAGE_EDIT:
+                        if (!document.getElementById("message-content-" + value.id)) return crash();
+                        document.getElementById("message-content-" + value.id).innerHTML = getMessageContentText(value);
+                        break;
+                    case PACKETS.MESSAGE_DELETE:
+                        if (!document.getElementById("message-" + value.id)) return crash();
+                        document.getElementById("message-" + value.id).remove();
+                        break;
+                }
+            } catch (e) {
+            }
+        }
+    }
+    createWs();
+
+    function preCommand(msg) {
+        if (!msg.startsWith("/")) return false;
+        const cmd = msg.split(" ")[0].replace("/", "");
+        const args = msg.split(" ").slice(1).join(" ");
+        const Commands = {
+            ping: () => {
+                const pk = new XMLHttpRequest();
+                const start = Date.now();
+                pk.open("GET", "http" + "://print{{req.rawHeaders[1]}}/api?action=ping", false);
+                pk.send(null);
+                const ping = pk.responseText * 1 - start;
+                const tag = "print{{ChatAPI.getUser(req.user.id).username}}#print{{ChatAPI.getUser(req.user.id).discriminator}}";
+                const text = `<div class="message bot-message" id="ephemeral-${ephemeral++}">
+<div class="message-author-div">
+BOT
+<img class="message-author circle-img" src="http://${url}/avatars/bot" width="16" height="16" alt="BOT">
+<span class="message-date">${toDate(Date.now())}</span>
+<span class="message-command-top">@${tag} used /ping</span>
+</div>
+<div class="message-div">Your ping: ${ping} ms</div>
+<button class="message-command-bottom" onclick="document.getElementById('ephemeral-${ephemeral - 1}').innerHTML='';">Dismiss message</button>
+</div>`;
+                document.getElementById("messages").innerHTML = document.getElementById("messages").innerHTML + text;
+            }
+        };
+        if (!Commands[cmd]) return false;
+        Commands[cmd](args);
+        return true;
+    }
+
+    function send() {
+        const msg = document.getElementById("input").value;
+        if (!msg) return;
+        document.getElementById("input").value = "";
+        if (preCommand(msg)) return;
+        sendMessage(msg);
+    }
+
+    function sendMessage(content) {
+        sendPacket({
+            action: "SEND_MESSAGE",
+            message: {content},
+        });
+    }
+
+    function editMessage(messageId, content) {
+        sendPacket({
+            action: "EDIT_MESSAGE",
+            id: messageId,
+            message: {content}
+        });
+    }
+
+    function deleteMessage(messageId) {
+        sendPacket({
+            action: "DELETE_MESSAGE",
+            id: messageId
+        });
+    }
+</script>
+
+<br>
+
+<style>
+    * {
+        font-family: Calibri, serif;
+    }
+
+    .circle-img {
+        border-radius: 50%;
+    }
+
+    .bot-message {
+        background-color: gray;
+    }
+
+    .message-command-top {
+        color: blue;
+    }
+
+    .message-command-bottom {
+        color: blue;
+    }
+
+    .message-main-div {
+        width: 100%;
+        height: 85%;
+        overflow: scroll;
+    }
+</style>

@@ -1,0 +1,1 @@
+Click to go to their dms.<br>print{{users.filter(i=> i.id !== req.user.id).map(user=> `<a href="/dms/print{{user.id}}">print{{user.username}}</a> (print{{user.id}})<br>`).join("")}}
